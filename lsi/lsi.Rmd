@@ -1,0 +1,680 @@
+A Demonstration of Latent Semantic Indexing
+========================================================
+
+Information retrieval via literal term-matching can be inaccurate given that 
+there are many ways to express a concept (synonomy), as well as the fact
+that most words may have multiple meanings (polysemy). Mismatches in either the
+vocabulary of the document author or the user performing a keyword query may
+result in a large number of irrelevant hits being returned.
+
+Latent semantic indexing aims to overcome the shortcomings of such lexical 
+methods by decomposing a raw term-document matrix into a subspace of lower rank,
+while still preserving the implicit assocation of terms with conceptual topics 
+or meanings.
+
+This exercise illustrates a concrete example of LSI based on 3. A Demonstration
+of Latent Semantic Indexing in [Berry, Dumais & O'Brien's Using Linear Algebra 
+for Intelligent Information Retrieval, 1994](docs/berry95using.pdf).
+
+### In A Nutshell
+The basic steps for using latent semantic indexing (LSI) are:
+
+1. obtain a document corpus
+2. prepare a term-document matrix from corpus
+3. compute the singular value decomposition (SVD) of the original term-document 
+   matrix
+4. use the SVD to obtain a truncated approximation to the original term-document
+matrix to
+   * query documents
+   * fold in new documents
+
+Once you have the LSI-derived database, you can leverage it in many different
+applications, such as information discovery, text summarization, online
+customer support, document categorization, spam filtering, etc.
+
+### The Math
+LSI is a direct application of singular value decomposition (SVD). 
+
+Given an $m \times n$ term-document matrix $A$, where $m \ge n$ and 
+$Rank(A) = r$, $SVD(A)$ is defined as:
+
+$$ SVD(A) = U \Sigma V^T $$
+where
+
+   * $U^TU = V^TV = I_n$
+   * $\Sigma = diag(\sigma_1, \cdot \cdot \cdot, \sigma_r): \sigma_1 \ge \sigma_2 \cdot \cdot \cdot \ge \sigma_r$
+
+Term-concept matrix $U$ is an $m \times r$ matrix whose columns are the left 
+singular vectors. Diagonal matrix $\Sigma$ is an $r \times r$ matrix whose 
+diagonal values are the nonnegative square roots for the $n$ eigenvalues of
+$AA^T$. Concept-document matrix $V$ is an $r \times n$ matrix whose columns are 
+the right singular vectors.
+
+The takeaway:
+
+* SVD can be used to obtain a reduced-rank approximation to the original term-document matrix $A$
+* These statistically derived queries are more robust than naive lexical match searches
+* Gains in performance and memory usage can realized with rank reduction by approximating $A$ with $A_k$, where $k \lt r$
+
+### The Documents
+Let us assume we have the following database of book titles and corresponding
+labels. We would like to be able to search this database by related concepts and
+meanings.
+
+Label | Titles
+------|-------
+B1 | A Course on Integral Equations
+B2 | Attractors for Semigroups and Evolution Equations
+B3 | Automatic Differentiation of Algorithms - Theory, Implementation, and Application
+B4 | Geometrical Aspects of Partial Differential Equations
+B5 | Ideals, Varieties, and Algorithms - An Introduction to Computational Algebraic Geometry and Commutative Algebra
+B6 | Introduction to Hamiltonian Dynamical Systems and the N-Body Problem
+B7 | Knapsack Problems: Algorithms and Computer Implementations
+B8 | Methods of Solving Singular Systems of Ordinary Differential Equations
+B9 | Nonlinear Systems
+B10 | Ordinary Differential Equations
+B11 | Oscillation Theory for Neutral Differential Equations with Delay
+B12 | Oscillation Theory of Delay Differential Equations
+B13 | Pseudodifferential Operators and Nonlinear Partial Differential Equations
+B14 | Sinc Methods for Quadrature and Differential Equations
+B15 | Stability of Stochastic Differential Equations with Respect to Semi-Martingales
+B16 | The Boundary Integral Approach to Static and Dynamic Contact Problems
+B17 | The Double Mellin-Barnes Type Integrals and Their Applications to Convolution Theory
+
+First we read in the document names and titles, which are stored in csv-format 
+in the file [data/titles0.csv](data/titles0.csv)
+```{r tidy=F}
+data = read.csv("data/titles0.csv", 
+                header=T, 
+                row.names=1)
+```
+
+
+### Preparing the Term-Document Matrix
+
+Using the [tm text-mining package for R](http://cran.r-project.org/web/packages/tm/index.html), 
+we create a Corpus object to encapsulate the documents. From this corpus, we 
+will:
+
+* remove punctuation
+* toss out any [stop words](http://nlp.stanford.edu/IR-book/html/htmledition/dropping-common-terms-stop-words-1.html)
+* use [word-stemming](http://nlp.stanford.edu/IR-book/html/htmledition/stemming-and-lemmatization-1.html)
+* initially use only those terms that appear in at least 2 documents
+
+To further keep things simple, we will not use any local- or global-weighting 
+for the terms, and stick with plain term frequency.
+
+```{r tidy=F, message=F}
+library(tm)
+
+corp = Corpus(DataframeSource(data))
+
+ctrl = list(removePunctuation=T, 
+            stopwords=T, 
+            stemming=T, 
+            bounds=list(global=c(2,Inf)))
+
+tdm = TermDocumentMatrix(corp, ctrl)
+```
+
+The resulting term-document matrix contains a lot of information about the
+document corpus, the sparsity and weighting for the term-document matrix, as 
+well as a table of the terms (stems) and their corresponding document 
+frequencies.
+
+```{r echo=F, comment=""}
+inspect(tdm)
+```
+
+
+### Singular Value Decomposition: Rank-reduction
+
+Let us calculate the $SVD$, and see how the amount of variance explained relates
+to the number of singular vectors $k$.
+
+Computing the singular value decomposition of the term-document matrix is easy
+using the [svd](https://stat.ethz.ch/R-manual/R-patched/library/base/html/svd.html) 
+function in the base package.
+
+```{r tidy=F}
+A = svd(as.matrix(tdm))
+```
+
+#### Left Singular Vector Matrix $U$
+
+The matrix of left singular vectors, or $U$, is made available as attribute _u_ 
+of the list object returned from _svd_.
+
+```{r tidy=F, comment=""}
+dim(A$u)
+```
+
+YOu can see here that there are 18 rows, corresponding to the terms in our 
+document corpus. The 17 columns are the left singular vectors of $AA^T$, in 
+descending order.
+
+Here is a snippet of left singular vector matrix $U$ of the 18 terms, across the
+first 6 values of $r$:
+
+```{r tidy=F, echo=F, comment=""}
+tmp = A$u
+rownames(tmp) = tdm$dimnames$Terms
+tmp[1:18,1:6]
+```
+
+---
+
+#### Right Singular Vector Matrix $V$
+
+Similarly, the matrix of right singular vectors, or $V$, is made available as 
+attribute _v_ of the _svd_ object.
+
+```{r tidy=F, comment=""}
+dim(A$v)
+```
+
+YOu can see here that there are 17 rows, corresponding to the documents in our 
+corpus. The 17 columns are the right singular vectors of $A^TA$, in descending
+order.
+
+Here is a snippet of right singular vector matrix $V$ of the 17 documents, 
+across the first 6 values of $r$:
+
+```{r tidy=F, echo=F, comment=""}
+tmp = A$v
+rownames(tmp) = rownames(data)
+tmp[1:17,1:6]
+```
+
+---
+
+#### Singular Values $\Sigma$ 
+
+An _SVD_ factorizes ...
+
+The singular values of the $SVD$ matrix factorization are the diagonal entries
+of $\Sigma$. 
+
+In the case of R, these diagonal entries are returned as the attribute _d_ of
+the _svd_ object.
+
+```{r tidy=F, comment=""}
+A$d
+```
+
+These singular values in the diagonal, like the columns of $U$ and $V$, are in
+descending order of the amount of variance explained. 
+
+```{r tidy=F, echo=F, comment=""}
+sv = A$d^2/sum(A$d^2)
+
+cumsum(sv)
+```
+
+Plotting the number of singular vectors used versus the amount of variance
+explained show that even with $k = 6$, over 80% of the variance of the original
+term-document matrix can be captured. Selecting an appropriate reduced rank $k$
+will surpress the noise and variability of the words in the original corpus,
+emphasizing the relations between concepts within the documents.
+
+Computationally, working within a reduced space will lead to savings in space 
+and time.
+
+```{r fig.width=8, fig.height=6, echo=F}
+# visualize the percentage of variance explained
+# given the number of singular vectors
+plot(cumsum(sv) * 100.0,
+    pch=19,
+    col="blue",
+    sub="Fig. 1: Number of singular vectors & percentage of variance explained",
+    xlab="singular vectors",
+    ylab="% var explained")
+```
+
+
+### Latent Semantic Indexing in Action
+
+Let's try an example of latent semantic indexing on our term-document matrix
+with a reduced rank. 
+
+We will select $k = 2$, since we can easily create plots in two dimensions.
+
+```{r tidy=F}
+U_k = A$u[,1:2]   # left singular vectors (terms)
+S_k = A$d[1:2]    # diagonal of singular vectors
+V_k = A$v[,1:2]   # right singular vectors (documents)
+
+docs_list  = rownames(data)
+terms_list = tdm$dimnames$Terms
+
+rownames(U_k) = terms_list
+rownames(V_k) = docs_list
+```
+
+Taking the values for the term-concept matrix $U_{k=2}$ and then weighting them
+accordingly by their respective $\sigma_1$ and $\sigma_2$ from $\Sigma_{k=2}$,
+we can plot the terms in our corpus in two dimensions. Even with only these two
+dimensions, the latent relationships between terms begins to appear.
+
+We can also do likewise for the documents using concept-document matrix 
+$V_{k=2}$, and so the clusterings for documents also reveal themselves.
+
+```{r fig.width=10, fig.height=8, echo=F}
+# terms
+terms_x = U_k[,1]*S_k[1]
+terms_y = U_k[,2]*S_k[2]
+
+plot(terms_x, terms_y, 
+     col="#d8b365", 
+     pch=16, 
+     xlim=c(-3.5, 0.5), ylim=c(-2.0, 1.0), 
+     sub= "Fig: 2. Two-dimensional plot of terms and documents",
+     xlab="", ylab="")
+abline(v=0,h=0,lty=3)
+
+# terms
+text(terms_x, terms_y, terms_list, col="#d8b365", cex=0.9, pos=4)
+
+# documents
+docs_x = V_k[,1]*S_k[1]
+docs_y = V_k[,2]*S_k[2]
+
+points(docs_x, docs_y, col="#5ab4ac", pch=17)
+text(docs_x, docs_y, docs_list, col="#5ab4ac", cex=0.9, pos=4)
+```
+
+### SVD Querying
+
+Consider now a user query against this reduced-rank SVD database with the terms
+for _application_ and _theory_. Since we are stemming, the corresponding stem 
+forms for theses terms are _applic_ and _theori_. We build our query using the
+general formula:
+
+$$ \hat q = q^T U_k \Sigma_k^{-1} $$
+
+```{r tidy=F}
+q = rep(0, length(terms_list))
+i = match(c('applic', 'theori'), terms_list)
+q[i] = 6 # arbitrary weighting, mostly to elongate the query vector
+         # in the plots that follow
+q_hat = q %*% U_k %*% solve(diag(S_k))
+```
+
+Having calculated our query $\hat q$, we can now visualize where our query would
+end up when projected in two-dimensional space.
+
+```{r fig.width=10, fig.height=8, tidy=F, echo=F}
+plot(terms_x, terms_y, 
+     col="#d8b365", 
+     pch=16, 
+     xlim=c(-3.5, 0.5), ylim=c(-2.0, 1.0), 
+     sub="Fig. 3: Query on \"application\" and \"theory\"",
+     xlab="", ylab="")
+abline(v=0,h=0,lty=3)
+
+# terms
+text(terms_x, terms_y, terms_list, col="#d8b365", cex=0.9, pos=4)
+
+# documents
+points(docs_x, docs_y, col="#5ab4ac", pch=17)
+text(docs_x, docs_y, docs_list, col="#5ab4ac", cex=0.9, pos=4)
+
+# query
+points(terms_x[i], terms_y[c(i)], col="#ef6548", pch=16)
+text(terms_x[i], terms_y[i], terms_list[i], col="#ef6548", cex=0.9, pos=4)
+
+text(q_hat[1], q_hat[2], expression(hat(q)), col="#ef6548", cex=0.9, pos=2)
+arrows(0,0, q_hat[1], q_hat[2], length=0.10, col="#ef6548")
+```
+
+### Comparing Query $\hat q$ With the Documents
+
+Now we can look at the documents to see which are close in terms of semantic
+closeness to our query. Note that "closeness"" here does *not* mean Euclidean distance, but rather by measuring the angle $\Theta$ between query and document vectors. 
+
+Treating query $\hat q$ as a vector, we can compare it to another document 
+vector using the following measure of vector similarity:
+
+$$ similarity =  cos(\Theta) = { A \cdot B \over \|A\| \|B\| }$$
+
+Here is a simple implementation assuming points in two dimensions:
+```{r tidy=F, comment=""}
+# simple cosine similarity in 2D
+cossim = function(p1, p2) {
+  v1 = c(p1)
+  v2 = c(p2)
+  abs( v1 %*% v2 / sqrt( v1%*%v1 * v2%*%v2) )[1]
+}
+```
+
+Similarity values range from 0 to 1, where 0 indicates a lack of similarity and
+a 1 indicates strong similarity. Graphically, the smaller the angle between two
+vectors, the greater the semantic relation between them.
+
+We will first try looking for similar documents with $cos(\Theta) \gt 0.90$. Our query with this threshold yields the following hits.
+```{r tidy=F, comment=""}
+sims = apply(V_k, 1, function(d) cossim(d, q_hat))
+
+# let us try 0.90 as threshold
+docs_list[ which(sims>0.9) ]
+```
+
+```{r echo=F, comment=""}
+hits = which(sims>0.9)
+```
+
+There are 2 observations of interest here:
+
+1. Despite documents B5, B6 and B7 *not* including the terms _application_ or _theory_, they are nevertheless deemed close to query $\hat q$ as they share similar concepts.
+2. Documents B11 and B12 both share _theory_ with $\hat q$, but are not returned as they differ in concept from the query. However, lowering similarity threshold to 0.4 will return those documents as well.
+
+```{r tidy=F, comment=""}
+docs_list[ which(sims>0.4) ]
+```
+
+---
+
+Let us continue with using a similarity threshold of 0.9. Visualizing this, we see that the documents B3, B5, B6, B7, B16 and B17 are fairly close in angle $\Theta$ with query $\hat q$. 
+
+```{r fig.width=10, fig.height=8, tidy=F, echo=F, comment=""}
+plot(terms_x, terms_y, 
+     col="#d8b365", 
+     pch=16, 
+     xlim=c(-3.5, 0.5), ylim=c(-2.0, 1.0), 
+     sub= expression(paste("Fig. 4: Query ", hat(q), " and semantically related documents (", italic(cos(Theta)>0.90), ")")), 
+     xlab="", ylab="")
+abline(v=0,h=0,lty=3)
+
+# terms
+text(terms_x, terms_y, terms_list, col="#d8b365", cex=0.9, pos=4)
+
+# documents
+points(docs_x, docs_y, col="#5ab4ac", pch=17)
+text(docs_x, docs_y, docs_list, col="#5ab4ac", cex=0.9, pos=4)
+
+# query
+points(terms_x[i], terms_y[c(i)], col="#ef6548", pch=16)
+text(terms_x[i], terms_y[i], terms_list[i], col="#ef6548", cex=0.9, pos=4)
+
+text(q_hat[1], q_hat[2], expression(hat(q)), col="#ef6548", cex=0.9, pos=2)
+arrows(0,0, q_hat[1], q_hat[2], length=0.10, col="#ef6548")
+
+# hits
+# btw, we need to assign the result to a dummy variable
+# in order to avoid having this cell output a NULL
+ignore = apply(V_k[hits,], 1, function(p) lines(c(0,p[1]*S_k[1]), c(0,p[2]*S_k[2]), col="#5ab4ac") )
+```
+
+
+### Updating: Folding In New Documents
+
+At this point, the right singular vector (documents) matrix $V_{k=2}^T$ comprises the following 17 documents:
+```{r echo=F, comment=""}
+V_k
+```
+
+Now consider the case where we would like to add three new documents. 
+
+Label | Titles
+------|-------
+B18 | Systems of Nonlinear Equations
+B19 | Ordinary Algorithms for Integral and Differential Equations
+B20 | Ordinary Applications of Oscillation Theory
+
+Rather than creating a completely new term-document matrix and then 
+re-calculating the entire SVD database anew, we can "fold in" the new documents
+into the existing SVD, saving both time and space. 
+
+Note that there are no new terms being added when we fold in these three new 
+documents. We will show how to add new terms in the following section.
+
+---
+
+We first read in the new documents, create another term-document matrix, and
+save the document names and resulting terms list to variables for later use.
+
+```{r tidy=F}
+data2 = read.csv("data/titles1.csv", 
+                 header=T, 
+                 row.names=1)
+
+corp2 = Corpus(DataframeSource(data2))
+
+tdm2 = TermDocumentMatrix(corp2, 
+                          list(removePunctuation=T, 
+                               stopwords=T, 
+                               stemming=T))
+
+docs_list2 = rownames(data2)
+terms_list2 = tdm2$dimnames$Terms
+```
+
+We would next fold in a new $m \times 3$ documents vector, $d$, into our 
+existing LSI database by projecting vector $d$ onto the span of current term 
+vectors which are the columns of $U_{k=2}$. 
+
+Start by creating a matrix $d$ for holding the term frequency values for the 3 
+new documents.
+
+```{r tidy=F}
+d = matrix(rep(0, length(docs_list2)*length(terms_list)), 
+           ncol=length(docs_list2))
+rownames(d) = terms_list
+```
+
+Set the term frequency counts in the 3 new documents with respect to the 
+existing list of terms. We will use a matrix instead of the TermDocumentMatrix 
+object itself, since it is easier to manipulate here.
+```{r tidy=F}
+tmpM = as.matrix(tdm2)
+
+for (t in terms_list) {
+  if (!is.na(match(t, terms_list2))) { 
+    d[t,] = tmpM[t,]
+  }
+}
+```
+
+$d$ now looks like this:
+```{r echo=F, comment=""}
+d
+```
+
+Now we calculate the projection of vector $d$ onto $U_{k=2}$ with
+
+$$ \hat d = d^T U_k \Sigma_k^{-1} $$
+
+```{r tidy=F}
+d_hat = t(d) %*% U_k %*% solve(diag(S_k))
+rownames(d_hat) = docs_list2
+```
+
+Append $\hat d$ to $V_{k=2}$, and don't forget to add the names for the 3 newly
+folded-in documents to our list of document names.
+```{r tidy=F}
+V_k = rbind(V_k, d_hat)
+
+docs_list = c(docs_list, docs_list2)
+```
+
+The updated $V_{k=2}$ includes the 3 new documents.
+```{r echo=F, comment=""}
+V_k
+```
+
+---
+
+Let's put it all together, and try a 2nd query on the terms _application_ and
+_ordinary_ on our newly updated database with 20 documents. You can see that
+now B18, B19 and B20 are in our document space, and that querying with _applic_
+and _ordinari_ yields hits with 0.9 threshold on documents B3, B17 and the new
+B20.
+
+```{r fig.width=10, fig.height=8, echo=F}
+q = rep(0, length(terms_list))
+i = match(c('applic', 'ordinari'), terms_list)
+q[i] = 6 # arbitrary weighting, mostly to elongate the query vector
+q_hat = q %*% U_k %*% solve(diag(S_k))
+
+sims = apply(V_k, 1, function(d) cossim(d, q_hat))
+
+# let us try 0.90 as threshold
+hits = which(sims>0.9)
+
+plot(terms_x, terms_y, 
+     col="#d8b365", 
+     pch=16, 
+     xlim=c(-3.5, 0.5), ylim=c(-2.0, 1.0), 
+     sub= expression(paste("Fig. 5: A 2nd query ", hat(q), " on an updated SVD, and semantically related documents (", italic(cos(Theta)>0.90), ")")), 
+     xlab="", ylab="")
+abline(v=0,h=0,lty=3)
+
+# terms
+text(terms_x, terms_y, terms_list, col="#d8b365", cex=0.9, pos=4)
+
+# documents
+docs_x = V_k[,1]*S_k[1]
+docs_y = V_k[,2]*S_k[2]
+
+# the original 17 documents
+points(docs_x[1:17], docs_y[1:17], col="#5ab4ac", pch=17)
+text(docs_x[1:17], docs_y[1:17], docs_list[1:17], col="#5ab4ac", cex=0.9, pos=4)
+# the 3 new documents
+points(docs_x[18:20], docs_y[18:20], col="#fc4e2a", pch=17)
+text(docs_x[18:20], docs_y[18:20], docs_list[18:20], col="#fc4e2a", cex=0.9, pos=4)
+
+# query
+points(terms_x[i], terms_y[c(i)], col="#ef6548", pch=16)
+text(terms_x[i], terms_y[i], terms_list[i], col="#ef6548", cex=0.9, pos=4)
+
+text(q_hat[1], q_hat[2], expression(hat(q)), col="#ef6548", cex=0.9, pos=2)
+arrows(0,0, q_hat[1], q_hat[2], length=0.10, col="#ef6548")
+
+# hits
+# btw, we need to assign the result to a dummy variable
+# in order to avoid having this cell output a NULL
+ignore = apply(V_k[hits,], 1, function(p) lines(c(0,p[1]*S_k[1]), c(0,p[2]*S_k[2]), col="#5ab4ac") )
+```
+
+
+### Updating: Folding In New Terms
+
+Adding new terms into our reduced rank database is similar to the operation of
+adding new documents. 
+
+Let's say that we are considering adding yet another document.
+
+Label | Titles
+------|-------
+B21 | An Introduction to Statistical Learning
+
+Concerning ourselves only with the fact that _statistical_ and _learning_ are
+not included amongst the terms in our corpus, we can fold-in these new terms in
+order to prepare for adding this new document.
+
+The blah, blah, blah.
+
+```{r tidy=F}
+data3 = data.frame(c("An Introduction to Statistical Learning"))
+
+corp3 = Corpus(DataframeSource(data3))
+
+tdm3  = TermDocumentMatrix(corp3, 
+                           list(removePunctuation=T, 
+                                stopwords=T, 
+                                stemming=T))
+
+# we need to add the terms for "learning" and "statistical" 
+terms_new = setdiff(tdm3$dimnames$Terms, terms_list)
+```
+
+First we need to fold-in the new document. _learning_ and _statistical_ are not
+yet part of our term collection, but _introduction_ is, so we need to make sure
+we count that.
+
+```{r tidy=F}
+d = matrix(rep(0, length(terms_list)), ncol=1)
+rownames(d) = terms_list
+
+d['introduct',] = 1
+
+d_hat = t(d) %*% U_k %*% solve(diag(S_k))
+rownames(d_hat) = c("B21")
+
+V_k = rbind(V_k, d_hat)
+
+docs_list = c(docs_list, c("B21"))
+```
+
+We would next fold in a new $2 \times n$ term vector, $t$, into our existing
+LSI database by projecting vector $t$ onto the span of current document vectors
+which are the columns of $V_{k=2}$. 
+
+Start by creating a matrix $t$ for holding the document frequency values for the
+2 new terms.
+
+```{r tidy=F}
+t = matrix(rep(0, length(docs_list)*length(terms_new)), 
+           nrow=length(terms_new))
+
+# "learning" and "statistical" only appear in B21!
+t[,21] = 1
+rownames(t) = terms_new
+```
+
+$t$ now looks like this:
+```{r echo=F, comment=""}
+t
+```
+
+Now we compute the projection of vector $t$ onto $V_{k=2}$ with
+
+$$ \hat t = t V_k \Sigma_k^{-1} $$
+
+```{r tidy=F}
+t_hat = t %*% V_k %*% solve(diag(S_k))
+rownames(t_hat) = terms_new
+```
+
+Append $\hat t$ to $U_{k=2}$, and don't forget to add the newly-folded in terms 
+to our variable listing the stemmed terms.
+```{r tidy=F}
+U_k = rbind(U_k, t_hat)
+
+terms_list = c(terms_list, terms_new)
+```
+
+The updated $U_{k=2}$ includes the 2 new terms.
+```{r echo=F, comment=""}
+U_k
+```
+
+```{r fig.width=10, fig.height=8, echo=F}
+# terms
+terms_x = U_k[,1]*S_k[1]
+terms_y = U_k[,2]*S_k[2]
+
+plot(terms_x, terms_y, 
+     col="#d8b365", 
+     pch=16, 
+     xlim=c(-3.5, 0.5), ylim=c(-2.0, 1.0), 
+     sub="Fig. 6: Folding in new terms in a new document", 
+     xlab="", ylab="")
+abline(v=0,h=0,lty=3)
+
+# the original 18 terms
+text(terms_x[1:18], terms_y[1:18], terms_list[1:18], col="#d8b365", cex=0.9, pos=4)
+# the 2 new terms
+text(terms_x[19:20], terms_y[19:20], terms_list[19:20], col="#fc4e2a", cex=0.9, pos=4)
+
+# documents
+docs_x = V_k[,1]*S_k[1]
+docs_y = V_k[,2]*S_k[2]
+
+# the original 20 documents
+points(docs_x[1:20], docs_y[1:20], col="#5ab4ac", pch=17)
+text(docs_x[1:20], docs_y[1:20], docs_list[1:20], col="#5ab4ac", cex=0.9, pos=4)
+# the new document
+points(docs_x[21], docs_y[21], col="#fc4e2a", pch=17)
+text(docs_x[21], docs_y[21], docs_list[21], col="#fc4e2a", cex=0.9, pos=4)
+```
